@@ -8,7 +8,6 @@
 import argparse
 import os
 import tensorflow as tf
-from getcifa100 import getData
 
 from tensorpack import *
 from tensorpack.dataflow import dataset
@@ -31,8 +30,7 @@ To train:
     ./cifar10-resnet.py --gpu 0,1
 """
 
-BATCH_SIZE = 128
-NUM_UNITS = None
+BATCH_SIZE = 256
 
 
 def convnormrelu(x, name, chan):
@@ -43,7 +41,7 @@ def convnormrelu(x, name, chan):
 
 class VGG16(ModelDesc):
 
-    def __init__(self, n):
+    def __init__(self):
         super(VGG16, self).__init__()
 
     def inputs(self):
@@ -54,7 +52,7 @@ class VGG16(ModelDesc):
         image = image / 128.0
         assert tf.test.is_gpu_available()
         image = tf.transpose(image, [0, 3, 1, 2])
-        logits = VGG16.get_logits(image)
+        logits = self.get_logits(image)
         tf.nn.softmax(logits, name='output')
         cost = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=label)
         cost = tf.reduce_mean(cost, name='cross_entropy_loss')
@@ -67,7 +65,7 @@ class VGG16(ModelDesc):
                                           480000, 0.2, True)
         wd_cost = tf.multiply(wd_w, regularize_cost('.*/W', tf.nn.l2_loss), name='wd_cost')
         add_moving_summary(cost, wd_cost)
-        add_param_summary(('.*/W', ['histogram']))   # monitor W
+        # add_param_summary(('.*/W', ['histogram']))   # monitor W
         return tf.add_n([cost, wd_cost], name='cost')
 
     def get_logits(self, image):
@@ -105,7 +103,7 @@ class VGG16(ModelDesc):
                       .BatchNorm('fc1b1')
                       .FullyConnected('fc2', 100, activation=tf.identity)())
 
-        add_param_summary(('.*', ['histogram', 'rms']))
+        # add_param_summary(('.*', ['histogram', 'rms']))
         return logits
 
     def optimizer(self):
@@ -130,19 +128,13 @@ def get_data(train_or_test):
         ]
     ds = AugmentImageComponent(ds, augmentors)
     ds = BatchData(ds, BATCH_SIZE, remainder=not isTrain)
-    if isTrain:
-        ds = PrefetchData(ds, 3, 2)
     return ds
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--gpu', help='comma separated list of GPU(s) to use.')
-    parser.add_argument('-n', '--num_units',
-                        help='number of units in each stage',
-                        type=int, default=18)
     parser.add_argument('--load', help='load model for training')
     args = parser.parse_args()
-    NUM_UNITS = args.num_units
 
     if args.gpu:
         os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
@@ -153,16 +145,16 @@ if __name__ == '__main__':
     dataset_test = get_data('test')
 
     config = TrainConfig(
-        model=Model(n=NUM_UNITS),
+        model=VGG16(),
         dataflow=dataset_train,
         callbacks=[
             ModelSaver(),
             InferenceRunner(dataset_test,
                             [ScalarStats('cost'), ClassificationError('wrong_vector')]),
             ScheduledHyperParamSetter('learning_rate',
-                                      [(1, 0.1), (82, 0.01), (123, 0.001), (300, 0.0002)])
+                                      [(1, 0.1), (102, 0.01), (223, 0.001), (500, 0.0002)])
         ],
-        max_epoch=400,
+        max_epoch=1000,
         session_init=SaverRestore(args.load) if args.load else None
     )
     num_gpu = max(get_num_gpu(), 1)
